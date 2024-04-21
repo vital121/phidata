@@ -3,11 +3,11 @@ from typing import List, Optional
 
 from phi.document import Document
 from phi.knowledge.website import WebsiteKnowledgeBase
-from phi.tools import ToolRegistry
+from phi.tools import Toolkit
 from phi.utils.log import logger
 
 
-class WebsiteTools(ToolRegistry):
+class WebsiteTools(Toolkit):
     def __init__(self, knowledge_base: Optional[WebsiteKnowledgeBase] = None):
         super().__init__(name="website_tools")
         self.knowledge_base: Optional[WebsiteKnowledgeBase] = knowledge_base
@@ -15,7 +15,7 @@ class WebsiteTools(ToolRegistry):
         if self.knowledge_base is not None and isinstance(self.knowledge_base, WebsiteKnowledgeBase):
             self.register(self.add_website_to_knowledge_base)
         else:
-            self.register(self.read_website)
+            self.register(self.read_url)
 
     def add_website_to_knowledge_base(self, url: str) -> str:
         """This function adds a websites content to the knowledge base.
@@ -35,8 +35,8 @@ class WebsiteTools(ToolRegistry):
         self.knowledge_base.load(recreate=False)
         return "Success"
 
-    def read_website(self, url: str) -> str:
-        """This function reads a website and returns the content.
+    def read_url(self, url: str) -> str:
+        """This function reads a url and returns the content.
 
         :param url: The url of the website to read.
         :return: Relevant documents from the website.

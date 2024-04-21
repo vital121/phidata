@@ -18,14 +18,17 @@
 
 # Ignore .env files
 .env
+
+# Ignore .envrc files (used by direnv: https://direnv.net/)
 .envrc
+
 
 # ignore storage dir
 /storage
 .images
 
-# ignore local dir
-local
+# ignore wip dir
+wip
 
 # ignore dist dir
 dist
@@ -35,5 +38,10 @@ dist
 venv*
 phienv*
 aienv*
+
+# ignore tmp dirs
+scratch
+junk
+tmp
 
 .ipynb_checkpoints

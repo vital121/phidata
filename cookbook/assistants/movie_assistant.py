@@ -16,7 +16,7 @@ class MovieScript(BaseModel):
 
 
 movie_assistant = Assistant(
-    description="You help people write movie ideas.",
+    description="You help write movie scripts.",
     output_model=MovieScript,
 )
 

@@ -1,6 +1,6 @@
 from typing import Optional, Tuple, List, Dict, Any
 
-from phi.tools import ToolRegistry
+from phi.tools import Toolkit
 from phi.utils.log import logger
 
 try:
@@ -9,7 +9,7 @@ except ImportError:
     raise ImportError("`duckdb` not installed. Please install using `pip install duckdb`.")
 
 
-class DuckDbTools(ToolRegistry):
+class DuckDbTools(Toolkit):
     def __init__(
         self,
         db_path: Optional[str] = None,
@@ -18,10 +18,10 @@ class DuckDbTools(ToolRegistry):
         read_only: bool = False,
         config: Optional[dict] = None,
         run_queries: bool = True,
-        inspect_queries: bool = True,
+        inspect_queries: bool = False,
         create_tables: bool = True,
         summarize_tables: bool = True,
-        export_tables: bool = True,
+        export_tables: bool = False,
     ):
         super().__init__(name="duckdb_tools")
 

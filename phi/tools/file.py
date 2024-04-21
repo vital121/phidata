@@ -1,17 +1,17 @@
 from pathlib import Path
 from typing import Optional, List
 
-from phi.tools import ToolRegistry
+from phi.tools import Toolkit
 from phi.utils.log import logger
 
 
-class FileTools(ToolRegistry):
+class FileTools(Toolkit):
     def __init__(
         self,
         base_dir: Optional[Path] = None,
         save_files: bool = True,
         read_files: bool = True,
-        list_files: bool = False,
+        list_files: bool = True,
     ):
         super().__init__(name="file_tools")
 

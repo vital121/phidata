@@ -1,8 +1,7 @@
 from phi.assistant import Assistant
 from phi.llm.openai import OpenAIChat
 
-
-assistant = Assistant(llm=OpenAIChat(model="gpt-4-vision-preview"))
+assistant = Assistant(llm=OpenAIChat(model="gpt-4-turbo"))
 
 # Single Image
 assistant.print_response(
@@ -30,5 +29,6 @@ assistant.print_response(
             "type": "image_url",
             "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
         },
-    ]
+    ],
+    markdown=True,
 )

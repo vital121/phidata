@@ -1,6 +1,8 @@
 import json
+from os import getenv
+from textwrap import dedent
 from uuid import uuid4
-from typing import List, Any, Optional, Dict, Iterator, Callable, Union, Type, Tuple
+from typing import List, Any, Optional, Dict, Iterator, Callable, Union, Type, Tuple, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, Field, ValidationError
 
@@ -10,10 +12,11 @@ from phi.llm.base import LLM
 from phi.llm.message import Message
 from phi.llm.references import References  # noqa: F401
 from phi.memory.assistant import AssistantMemory
+from phi.prompt.template import PromptTemplate
 from phi.storage.assistant import AssistantStorage
 from phi.task.task import Task
 from phi.task.llm import LLMTask
-from phi.tools import Tool, ToolRegistry, Function
+from phi.tools import Tool, Toolkit, Function
 from phi.utils.log import logger, set_log_level_to_debug
 from phi.utils.message import get_text_from_message
 from phi.utils.merge_dict import merge_dictionaries
@@ -67,10 +70,8 @@ class Assistant(BaseModel):
     # A list of tools provided to the LLM.
     # Tools are functions the model may generate JSON inputs for.
     # If you provide a dict, it is not called by the model.
-    tools: Optional[List[Union[Tool, ToolRegistry, Callable, Dict, Function]]] = None
-    # Allow the assistant to use tools
-    use_tools: bool = False
-    # Show tool calls in LLM messages.
+    tools: Optional[List[Union[Tool, Toolkit, Callable, Dict, Function]]] = None
+    # Show tool calls in LLM response.
     show_tool_calls: bool = False
     # Maximum number of tool calls allowed.
     tool_call_limit: Optional[int] = None
@@ -81,19 +82,30 @@ class Assistant(BaseModel):
     #   forces the model to call that tool.
     # "none" is the default when no tools are present. "auto" is the default if tools are present.
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-    # -*- Available tools
-    # If use_tools is True and update_knowledge_base is True,
-    # then a tool is added that allows the LLM to update the knowledge base.
-    update_knowledge_base: bool = False
-    # If use_tools is True and read_tool_call_history is True,
-    # then a tool is added that allows the LLM to get the tool call history.
+    # -*- Default tools
+    # Add a tool that allows the LLM to get the chat history.
+    read_chat_history: bool = False
+    # Add a tool that allows the LLM to search the knowledge base.
+    search_knowledge: bool = False
+    # Add a tool that allows the LLM to update the knowledge base.
+    update_knowledge: bool = False
+    # Add a tool is added that allows the LLM to get the tool call history.
     read_tool_call_history: bool = False
+    # If use_tools = True, set read_chat_history and search_knowledge = True
+    use_tools: bool = False
+
+    # -*- Important: this setting determines if the input messages are formatted
+    # If True, phidata will add the system prompt, references, and chat history
+    # If False, the input messages are sent to the LLM as is
+    format_messages: bool = True
 
     #
     # -*- Prompt Settings
     #
     # -*- System prompt: provide the system prompt as a string
     system_prompt: Optional[str] = None
+    # -*- System prompt template: provide the system prompt as a PromptTemplate
+    system_prompt_template: Optional[PromptTemplate] = None
     # -*- System prompt function: provide the system prompt as a function
     # This function is provided the "Assistant object" as an argument
     #   and should return the system_prompt as a string.
@@ -104,23 +116,23 @@ class Assistant(BaseModel):
     # If True, build a default system prompt using instructions and extra_instructions
     build_default_system_prompt: bool = True
     # -*- Settings for building the default system prompt
-    # Assistant description for the default system prompt
+    # A description of the Assistant that is added to top the system prompt.
     description: Optional[str] = None
-    # List of instructions for the default system prompt
+    # List of instructions added to the system prompt in `<instructions>` tags.
     instructions: Optional[List[str]] = None
     # List of extra_instructions added to the default system prompt
-    # Use these when you want to use the default prompt but also add some extra instructions
+    # Use these when you want to add some extra instructions at the end of the default instructions.
     extra_instructions: Optional[List[str]] = None
     # Add a string to the end of the default system prompt
     add_to_system_prompt: Optional[str] = None
-    # If True, add instructions for using the knowledge base to the default system prompt if knowledge base is provided
+    # If True, add instructions for using the knowledge base to the system prompt if knowledge base is provided
     add_knowledge_base_instructions: bool = True
-    # If True, add instructions for letting the user know that the assistant does not know the answer
+    # If True, add instructions to return "I dont know" when the assistant does not know the answer.
     prevent_hallucinations: bool = False
     # If True, add instructions to prevent prompt injection attacks
     prevent_prompt_injection: bool = False
     # If True, add instructions for limiting tool access to the default system prompt if tools are provided
-    limit_tool_access: bool = True
+    limit_tool_access: bool = False
     # If True, add the current datetime to the prompt to give the assistant a sense of time
     # This allows for relative times like "tomorrow" to be used in the prompt
     add_datetime_to_instructions: bool = False
@@ -128,8 +140,10 @@ class Assistant(BaseModel):
     markdown: bool = False
 
     # -*- User prompt: provide the user prompt as a string
-    # Note: this will ignore the input message provided to the run function
+    # Note: this will ignore the message sent to the run function
     user_prompt: Optional[Union[List, Dict, str]] = None
+    # -*- User prompt template: provide the user prompt as a PromptTemplate
+    user_prompt_template: Optional[PromptTemplate] = None
     # -*- User prompt function: provide the user prompt as a function.
     # This function is provided the "Assistant object" and the "input message" as arguments
     #   and should return the user_prompt as a Union[List, Dict, str].
@@ -152,6 +166,7 @@ class Assistant(BaseModel):
     # def references(assistant: Assistant, query: str) -> Optional[str]:
     #     ...
     references_function: Optional[Callable[..., Optional[str]]] = None
+    references_format: Literal["json", "yaml"] = "json"
     # Function to get the chat_history for the user prompt
     # This function, if provided, is called when add_chat_history_to_prompt is True
     # Signature:
@@ -174,10 +189,17 @@ class Assistant(BaseModel):
     # Metadata associated with the assistant tasks
     task_data: Optional[Dict[str, Any]] = None
 
+    # -*- Assistant Team
+    team: Optional[List["Assistant"]] = None
+    # When the assistant is part of a team, this is the role of the assistant in the team
+    role: Optional[str] = None
+    # Add instructions for delegating tasks to another assistants
+    add_delegation_instructions: bool = True
+
     # debug_mode=True enables debug logs
     debug_mode: bool = False
     # monitoring=True logs Assistant runs on phidata.com
-    monitoring: bool = False
+    monitoring: bool = getenv("PHI_MONITORING", "false").lower() == "true"
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -200,6 +222,13 @@ class Assistant(BaseModel):
     def llm_task(self) -> LLMTask:
         """Returns an LLMTask for this assistant"""
 
+        tools = self.tools
+        if self.team and len(self.team) > 0:
+            if tools is None:
+                tools = []
+            for assistant_index, assistant in enumerate(self.team):
+                tools.append(self.get_delegation_function(assistant, assistant_index))
+
         _llm_task = LLMTask(
             llm=self.llm.model_copy() if self.llm is not None else None,
             assistant_name=self.name,
@@ -211,11 +240,15 @@ class Assistant(BaseModel):
             use_tools=self.use_tools,
             show_tool_calls=self.show_tool_calls,
             tool_call_limit=self.tool_call_limit,
-            tools=self.tools,
+            tools=tools,
             tool_choice=self.tool_choice,
-            update_knowledge_base=self.update_knowledge_base,
+            read_chat_history=self.read_chat_history,
+            search_knowledge=self.search_knowledge,
+            update_knowledge=self.update_knowledge,
             read_tool_call_history=self.read_tool_call_history,
+            format_messages=self.format_messages,
             system_prompt=self.system_prompt,
+            system_prompt_template=self.system_prompt_template,
             system_prompt_function=self.system_prompt_function,
             build_default_system_prompt=self.build_default_system_prompt,
             description=self.description,
@@ -227,15 +260,60 @@ class Assistant(BaseModel):
             prevent_prompt_injection=self.prevent_prompt_injection,
             limit_tool_access=self.limit_tool_access,
             add_datetime_to_instructions=self.add_datetime_to_instructions,
+            add_delegation_instructions=self.add_delegation_instructions,
             markdown=self.markdown,
             user_prompt=self.user_prompt,
+            user_prompt_template=self.user_prompt_template,
             user_prompt_function=self.user_prompt_function,
             build_default_user_prompt=self.build_default_user_prompt,
             references_function=self.references_function,
+            references_format=self.references_format,
             chat_history_function=self.chat_history_function,
             output_model=self.output_model,
+            delegation_prompt=self.get_delegation_prompt(),
         )
         return _llm_task
+
+    def get_delegation_function(self, assistant: "Assistant", index: int) -> Function:
+        def _delegate_task_to_assistant(task_description: str) -> str:
+            return assistant.run(task_description, stream=False)  # type: ignore
+
+        assistant_name = assistant.name.replace(" ", "_").lower() if assistant.name else f"assistant_{index}"
+        delegation_function = Function.from_callable(_delegate_task_to_assistant)
+        delegation_function.name = f"delegate_task_to_{assistant_name}"
+        delegation_function.description = dedent(
+            f"""Use this function to delegate a task to {assistant_name}
+        Args:
+            task_description (str): A clear and concise description of the task the assistant should achieve.
+        Returns:
+            str: The result of the delegated task.
+        """
+        )
+        return delegation_function
+
+    def get_delegation_prompt(self) -> Optional[str]:
+        if self.team and len(self.team) > 0:
+            delegation_prompt = "You can delegate tasks to the following assistants:"
+            delegation_prompt += "\n<assistants>"
+            for assistant_index, assistant in enumerate(self.team):
+                delegation_prompt += f"\nAssistant {assistant_index + 1}:\n"
+                if assistant.name:
+                    delegation_prompt += f"Name: {assistant.name}\n"
+                if assistant.role:
+                    delegation_prompt += f"Role: {assistant.role}\n"
+                if assistant.tools is not None:
+                    _tools = []
+                    for _tool in assistant.tools:
+                        if isinstance(_tool, Toolkit):
+                            _tools.extend(list(_tool.functions.keys()))
+                        elif isinstance(_tool, Function):
+                            _tools.append(_tool.name)
+                        elif callable(_tool):
+                            _tools.append(_tool.__name__)
+                    delegation_prompt += f"Available tools: {', '.join(_tools)}\n"
+            delegation_prompt += "</assistants>"
+            return delegation_prompt
+        return None
 
     def to_database_row(self) -> AssistantRun:
         """Create a AssistantRun for the current Assistant (to save to the database)"""
@@ -336,9 +414,6 @@ class Assistant(BaseModel):
 
         if self.storage is not None and self.run_id is not None:
             self.db_row = self.storage.read(run_id=self.run_id)
-            if self.user_id is not None and self.db_row is not None and self.db_row.user_id != self.user_id:
-                logger.error(f"SECURITY ERROR: User id mismatch: {self.user_id} != {self.db_row.user_id}")
-                return None
             if self.db_row is not None:
                 logger.debug(f"-*- Loading run: {self.db_row.run_id}")
                 self.from_database_row(row=self.db_row)
@@ -413,6 +488,11 @@ class Assistant(BaseModel):
 
             # Set previous_task and current_task
             previous_task = current_task
+            if previous_task is not None and previous_task.show_output:
+                if stream:
+                    yield "\n\n"
+                run_output += "\n\n"
+
             current_task = task
 
             # -*- Prepare input message for the current_task
@@ -449,9 +529,6 @@ class Assistant(BaseModel):
                     if current_task.show_output:
                         run_output += chunk if isinstance(chunk, str) else ""
                         yield chunk if isinstance(chunk, str) else ""
-                if current_task.show_output:
-                    yield "\n\n"
-                    run_output += "\n\n"
             else:
                 current_task_response = current_task.run(message=current_task_message, stream=False, **kwargs)  # type: ignore
                 current_task_response_str = ""
@@ -469,10 +546,8 @@ class Assistant(BaseModel):
                         if current_task.show_output:
                             if stream:
                                 yield current_task_response_str
-                                yield "\n\n"
                             else:
                                 run_output += current_task_response_str
-                                run_output += "\n\n"
                 except Exception as e:
                     logger.debug(f"Failed to convert task response to json: {e}")
 
@@ -501,11 +576,11 @@ class Assistant(BaseModel):
 
         # -*- Update run output
         self.output = run_output
+        logger.debug(f"*********** Run End: {self.run_id} ***********")
 
         # -*- Yield final response if not streaming
         if not stream:
             yield run_output
-        logger.debug(f"*********** Run End: {self.run_id} ***********")
 
     def run(
         self, message: Optional[Union[List, Dict, str]] = None, stream: bool = True, **kwargs: Any
@@ -571,10 +646,10 @@ class Assistant(BaseModel):
         # -*- Generate response
         batch_llm_response_message = {}
         if stream:
-            for response_delta in self.llm.response_delta(messages=messages):
+            for response_delta in self.llm.generate_stream(messages=messages):
                 yield response_delta
         else:
-            batch_llm_response_message = self.llm.response_message(messages=messages)
+            batch_llm_response_message = self.llm.generate(messages=messages)
 
         # -*- Add prompts and response to the memory - these are added to the llm_messages
         self.memory.add_llm_messages(messages=messages)
@@ -658,7 +733,7 @@ class Assistant(BaseModel):
         for message in _messages_for_generating_name:
             _conv += f"{message.role.upper()}: {message.content}\n"
 
-        _conv += "\n\nConversation Name:"
+        _conv += "\n\nConversation Name: "
 
         system_message = Message(
             role="system",
@@ -667,7 +742,7 @@ class Assistant(BaseModel):
         )
         user_message = Message(role="user", content=_conv)
         generate_name_messages = [system_message, user_message]
-        generated_name = self.llm.parsed_response(messages=generate_name_messages)
+        generated_name = self.llm.response(messages=generate_name_messages)
         if len(generated_name.split()) > 15:
             logger.error("Generated name is too long. Trying again.")
             return self.generate_name()
@@ -730,11 +805,20 @@ class Assistant(BaseModel):
     # Print Response
     ###########################################################################
 
+    def convert_response_to_string(self, response: Any) -> str:
+        if isinstance(response, str):
+            return response
+        elif isinstance(response, BaseModel):
+            return response.model_dump_json(exclude_none=True, indent=4)
+        else:
+            return json.dumps(response, indent=4)
+
     def print_response(
         self,
         message: Optional[Union[List, Dict, str]] = None,
         stream: bool = True,
-        markdown: bool = True,
+        markdown: bool = False,
+        show_message: bool = True,
         **kwargs: Any,
     ) -> None:
         from phi.cli.console import console
@@ -761,11 +845,12 @@ class Assistant(BaseModel):
                 response_timer = Timer()
                 response_timer.start()
                 for resp in self.run(message, stream=True, **kwargs):
-                    response += resp if isinstance(resp, str) else ""
-                    _response = response if not markdown else Markdown(response)
+                    if isinstance(resp, str):
+                        response += resp
+                    _response = Markdown(response) if self.markdown else response
 
                     table = Table(box=ROUNDED, border_style="blue", show_header=False)
-                    if message:
+                    if message and show_message:
                         table.show_header = True
                         table.add_column("Message")
                         table.add_column(get_text_from_message(message))
@@ -782,10 +867,10 @@ class Assistant(BaseModel):
                 response = self.run(message, stream=False, **kwargs)  # type: ignore
 
             response_timer.stop()
-            _response = response if not markdown else Markdown(response)
+            _response = Markdown(response) if self.markdown else self.convert_response_to_string(response)
 
             table = Table(box=ROUNDED, border_style="blue", show_header=False)
-            if message:
+            if message and show_message:
                 table.show_header = True
                 table.add_column("Message")
                 table.add_column(get_text_from_message(message))
@@ -797,7 +882,7 @@ class Assistant(BaseModel):
         user: str = "User",
         emoji: str = ":sunglasses:",
         stream: bool = True,
-        markdown: bool = True,
+        markdown: bool = False,
         exit_on: Tuple[str, ...] = ("exit", "bye"),
     ) -> None:
         from rich.prompt import Prompt
